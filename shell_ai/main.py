@@ -30,6 +30,38 @@ class OpenAIOptions(Enum):
 class Colors:
     WARNING = '\033[93m'
     END = '\033[0m'
+    
+import requests
+import json
+
+class SystemMessageEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, SystemMessage):
+            return obj.__dict__
+        return super().default(obj)
+
+class DifyChat:
+    def generate(self, messages):
+        print(messages)
+        query = messages[0][0].content + messages[0][1].content
+        print(query)
+        headers = {
+            'Authorization': 'Bearer YOUR_DIFY_API_KEY', # 替换为你的 dify api key
+            'Content-Type': 'application/json'
+        }
+        
+        data = {
+            'inputs': {},
+            'query': query,
+            'response_mode': 'blocking',
+            'conversation_id': '',
+            'user': 'abc-123'
+        }
+
+        response = requests.post('https://api.dify.ai/v1/chat-messages', headers=headers, json=data)
+        print("Got Response from dify::" + response.text)
+        return response
+        
 
 
 def main():
@@ -92,7 +124,7 @@ def main():
 
     OPENAI_API_TYPE = os.environ.get("OPENAI_API_TYPE", "openai")
     OPENAI_API_VERSION = os.environ.get("OPENAI_API_VERSION", "2023-05-15")
-    if OPENAI_API_TYPE not in OpenAIOptions.__members__:
+    if OPENAI_API_TYPE not in OpenAIOptions.__members__ and OPENAI_API_TYPE != "dify": # 新增 dify 类型校验
         print(
             f"Your OPENAI_API_TYPE is not valid. Please choose one of {OpenAIOptions.__members__}"
         )
@@ -131,6 +163,8 @@ def main():
             openai_api_type="azure",
             temperature=0,
         )
+    if OPENAI_API_TYPE == "dify":
+        chat = DifyChat() # 新增 dify 类型 chat 实例
 
     if platform.system() == "Linux":
         info = platform.freedesktop_os_release()
@@ -154,16 +188,28 @@ def main():
 
         # Extract commands from the JSON response
         commands = []
-        for msg in response.generations[0]:
+        if (OPENAI_API_TYPE == "dify"): # 针对 Dify 差异化处理
             try:
-                json_content = code_parser(msg.message.content)
-                command_json = json.loads(json_content)
-                command = command_json.get("command", "")
-                if command:  # Ensure the command is not empty
+                data = json.loads(response.text) # 解析 dify 返回的 json
+                command_json = json.loads(data["answer"]) # Dify 的答复在 answer 字段中
+                command = command_json["command"] # 对齐原有逻辑，答复内容应为一个 json，其中 command 字段为命令
+                print(command) # 打印 dify 返回的 command
+                if command:  # 对齐原有逻辑
                     commands.append(command)
             except json.JSONDecodeError:
                 # Fallback: treat the message as a command
                 commands.append(msg.message.content)
+        else: # 原始逻辑
+            for msg in response.generations[0]:
+                try:
+                    json_content = code_parser(msg.message.content)
+                    command_json = json.loads(json_content)
+                    command = command_json.get("command", "")
+                    if command:  # Ensure the command is not empty
+                        commands.append(command)
+                except json.JSONDecodeError:
+                    # Fallback: treat the message as a command
+                    commands.append(msg.message.content)
 
         # Deduplicate commands
         commands = list(set(commands))
